@@ -267,8 +267,8 @@ public final class WorldRenderer {
         // TODO: Those values HAVE to match the hardcoded value for the forward transparent pass for chunks
         mainDirectionalLight.lightColorAmbient = new Vector3f(1.0f, 1.0f, 1.0f);
         mainDirectionalLight.lightColorDiffuse = new Vector3f(1.0f, 1.0f, 1.0f);
-        mainDirectionalLight.lightAmbientIntensity = 2.0f;
-        mainDirectionalLight.lightDiffuseIntensity = 1.0f;
+        mainDirectionalLight.lightAmbientIntensity = 1.0f;
+        mainDirectionalLight.lightDiffuseIntensity = 2.0f;
         mainDirectionalLight.lightSpecularIntensity = 0.0f;
 
         // TODO: won't need localPlayerSystem here once camera is in the ES proper
@@ -845,6 +845,9 @@ public final class WorldRenderer {
 
         // Sunlight
         Vector3f sunlightWorldPosition = new Vector3f(skysphere.getSunDirection(true));
+        sunlightWorldPosition.scale(50000.0f);
+        sunlightWorldPosition.add(activeCamera.getPosition());
+
         renderLightComponent(mainDirectionalLight, sunlightWorldPosition, program, camera, false);
 
         DefaultRenderingProcess.getInstance().endRenderDirectionalLights();
