@@ -23,16 +23,18 @@ import gnu.trove.map.hash.TIntIntHashMap;
 import org.lwjgl.opengl.ARBShaderObjects;
 import org.lwjgl.opengl.GL13;
 import org.lwjgl.opengl.GL20;
-import org.newdawn.slick.util.ResourceLoader;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.terasology.config.Config;
 import org.terasology.config.SystemConfig;
 import org.terasology.game.CoreRegistry;
+import org.terasology.game.paths.PathManager;
 import org.terasology.logic.manager.ShaderManager;
 import org.terasology.math.TeraMath;
+import org.terasology.rendering.cameras.Camera;
 import org.terasology.rendering.primitives.ChunkTessellator;
 import org.terasology.rendering.shader.IShaderParameters;
+import org.terasology.rendering.shader.ShaderParametersSSAO;
 import org.terasology.rendering.world.WorldRenderer;
 import org.terasology.world.block.Block;
 
@@ -40,11 +42,9 @@ import javax.swing.*;
 import javax.vecmath.Matrix3f;
 import javax.vecmath.Matrix4f;
 import javax.vecmath.Vector4f;
-import java.io.BufferedReader;
-import java.io.IOException;
-import java.io.InputStream;
-import java.io.InputStreamReader;
+import java.io.*;
 import java.nio.FloatBuffer;
+import java.util.HashMap;
 import java.util.Scanner;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -64,8 +64,13 @@ public class GLSLShaderProgramInstance {
     private TIntIntMap vertexPrograms = new TIntIntHashMap();
     private TIntIntMap shaderPrograms = new TIntIntHashMap();
 
+    //The following two maps do not contain a lot of elements.
+    private HashMap<String, Integer> uniformLocationMap = new HashMap(50, 0.8f);
+    private static HashMap<String, Float> prevValues = new HashMap();
+
     private int availableFeatures = 0;
     private int activeFeatures = 0;
+    private boolean activeFeaturesChanged = false;
 
     private IShaderParameters shaderParameters;
 
@@ -78,9 +83,9 @@ public class GLSLShaderProgramInstance {
         FEATURE_ALPHA_REJECT(0x02),
         FEATURE_LIGHT_POINT(0x04),
         FEATURE_LIGHT_DIRECTIONAL(0x08),
-        FEATURE_DEFERRED_LIGHTING(0x10),
         FEATURE_USE_MATRIX_STACK(0x20),
-        FEATURE_ALL(0x40);
+        FEATURE_USE_FORWARD_LIGHTING(0x40),
+        FEATURE_ALL(0x80);
 
         private int value;
         private ShaderProgramFeatures(int value) {
@@ -92,14 +97,19 @@ public class GLSLShaderProgramInstance {
     }
 
     private static String includedFunctionsVertex = "", includedFunctionsFragment = "";
+    private static String includedDefines = "", includedUniforms = "";
 
     static {
         InputStream vertStream = GLSLShaderProgram.class.getClassLoader().getResourceAsStream("org/terasology/include/globalFunctionsVertIncl.glsl");
         InputStream fragStream = GLSLShaderProgram.class.getClassLoader().getResourceAsStream("org/terasology/include/globalFunctionsFragIncl.glsl");
+        InputStream uniformsStream = GLSLShaderProgram.class.getClassLoader().getResourceAsStream("org/terasology/include/globalUniformsIncl.glsl");
+        InputStream definesStream = GLSLShaderProgram.class.getClassLoader().getResourceAsStream("org/terasology/include/globalDefinesIncl.glsl");
 
         try {
             includedFunctionsVertex = CharStreams.toString(new InputStreamReader(vertStream));
             includedFunctionsFragment = CharStreams.toString(new InputStreamReader(fragStream));
+            includedDefines = CharStreams.toString(new InputStreamReader(definesStream));
+            includedUniforms = CharStreams.toString(new InputStreamReader(uniformsStream));
         } catch (IOException e) {
             logger.error("Failed to load Include shader resources");
         } finally {
@@ -114,27 +124,38 @@ public class GLSLShaderProgramInstance {
             } catch (IOException e) {
                 logger.error("Failed to close globalFunctionsFragIncl.glsl stream");
             }
+            try {
+                uniformsStream.close();
+            } catch (IOException e) {
+                logger.error("Failed to close globalUniformsIncl.glsl stream");
+            }
+            try {
+                definesStream.close();
+            } catch (IOException e) {
+                logger.error("Failed to close globalDefinesIncl.glsl stream");
+            }
         }
     }
 
     protected static StringBuilder createShaderBuilder() {
         String preProcessorPreamble = "#version 120\n";
 
-        preProcessorPreamble += "float TEXTURE_OFFSET = " + Block.calcRelativeTileSize() + ";\n";
-        preProcessorPreamble += "float BLOCK_LIGHT_POW = " + WorldRenderer.BLOCK_LIGHT_POW + ";\n";
-        preProcessorPreamble += "float BLOCK_LIGHT_SUN_POW = " + WorldRenderer.BLOCK_LIGHT_SUN_POW + ";\n";
-        preProcessorPreamble += "float BLOCK_INTENSITY_FACTOR = " + WorldRenderer.BLOCK_INTENSITY_FACTOR + ";\n";
-        preProcessorPreamble += "float SHADOW_MAP_RESOLUTION = " + CoreRegistry.get(Config.class).getRendering().getShadowMapResolution() + ";\n";
+        preProcessorPreamble += "#define TEXTURE_OFFSET " + Block.calcRelativeTileSize() + "\n";
+        preProcessorPreamble += "#define BLOCK_LIGHT_POW " + WorldRenderer.BLOCK_LIGHT_POW + "\n";
+        preProcessorPreamble += "#define BLOCK_LIGHT_SUN_POW " + WorldRenderer.BLOCK_LIGHT_SUN_POW + "\n";
+        preProcessorPreamble += "#define BLOCK_INTENSITY_FACTOR " + WorldRenderer.BLOCK_INTENSITY_FACTOR + "\n";
+        preProcessorPreamble += "#define SHADOW_MAP_RESOLUTION " + (float) CoreRegistry.get(Config.class).getRendering().getShadowMapResolution() + "\n";
+        preProcessorPreamble += "#define SSAO_KERNEL_ELEMENTS " + ShaderParametersSSAO.SSAO_KERNEL_ELEMENTS + "\n";
+        preProcessorPreamble += "#define SSAO_NOISE_SIZE " + ShaderParametersSSAO.SSAO_NOISE_SIZE + "\n";
         // TODO: This shouldn't be hardcoded
-        preProcessorPreamble += "float TEXTURE_OFFSET_EFFECTS = " + 0.0625f + ";\n";
+        preProcessorPreamble += "#define TEXTURE_OFFSET_EFFECTS " + 0.0625f + "\n";
 
         Config config = CoreRegistry.get(Config.class);
         StringBuilder builder = new StringBuilder().append(preProcessorPreamble);
         if (config.getRendering().isAnimateGrass())
             builder.append("#define ANIMATED_GRASS \n");
-        if (config.getRendering().isAnimateWater()) {
+        if (config.getRendering().isAnimateWater())
             builder.append("#define ANIMATED_WATER \n");
-        }
         if (config.getRendering().getBlurIntensity() == 0)
             builder.append("#define NO_BLUR \n");
         if (config.getRendering().isFlickeringLight())
@@ -163,13 +184,15 @@ public class GLSLShaderProgramInstance {
             builder.append("#define DYNAMIC_SHADOWS_PCF \n");
         if (config.getRendering().isVolumetricFog())
             builder.append("#define VOLUMETRIC_FOG \n");
+        if (config.getRendering().isCloudShadows())
+            builder.append("#define CLOUD_SHADOWS \n");
 
         for (int i=0; i< SystemConfig.DebugRenderingStages.values().length; ++i) {
-            builder.append("#define "+SystemConfig.DebugRenderingStages.values()[i].toString()+" "+SystemConfig.DebugRenderingStages.values()[i].ordinal()+" \n");
+            builder.append("#define "+SystemConfig.DebugRenderingStages.values()[i].toString()+" int("+SystemConfig.DebugRenderingStages.values()[i].ordinal()+") \n");
         }
 
         for (int i=0; i< ChunkTessellator.ChunkVertexFlags.values().length; ++i) {
-            builder.append("#define "+ChunkTessellator.ChunkVertexFlags.values()[i].toString()+" "+ChunkTessellator.ChunkVertexFlags.values()[i].getValue()+" \n");
+            builder.append("#define "+ChunkTessellator.ChunkVertexFlags.values()[i].toString()+" int("+ChunkTessellator.ChunkVertexFlags.values()[i].getValue()+") \n");
         }
 
         return builder;
@@ -219,12 +242,12 @@ public class GLSLShaderProgramInstance {
     }
 
     private void compileAllShaderPermutations() {
-        int counter = 1;
         compileShaderProgram(0);
 
         TIntArrayList compiledPermutations = new TIntArrayList();
+        int counter = 1;
 
-        for (int i=1; i< ShaderProgramFeatures.FEATURE_ALL.getValue(); ++i) {
+        for (int i=1; i<ShaderProgramFeatures.FEATURE_ALL.getValue(); ++i) {
             // Compile all selected features for this shader...
             int maskedHash = (i & availableFeatures);
 
@@ -271,6 +294,10 @@ public class GLSLShaderProgramInstance {
             GL20.glDeleteShader(it.value());
         }
         vertexPrograms.clear();
+
+        uniformLocationMap.clear();
+        prevValues.clear();
+        disposed = true;
     }
 
     public boolean isDisposed() {
@@ -288,10 +315,16 @@ public class GLSLShaderProgramInstance {
             }
         }
 
-        if (type == GL20.GL_FRAGMENT_SHADER)
+        shader.append("\n");
+
+        shader.append(includedDefines);
+        shader.append(includedUniforms);
+
+        if (type == GL20.GL_FRAGMENT_SHADER) {
             shader.append(includedFunctionsFragment).append("\n");
-        else
+        } else {
             shader.append(includedFunctionsVertex).append("\n");
+        }
 
         if (type == GL20.GL_FRAGMENT_SHADER) {
             shader.append(shaderProgramBase.getFragShader());
@@ -306,6 +339,22 @@ public class GLSLShaderProgramInstance {
         } else if (type == GL20.GL_VERTEX_SHADER) {
             vertexPrograms.put(featureHash, shaderId);
             debugShaderType = "VERTEX";
+        }
+
+        // Dump all final shader sources to the log directory
+        try {
+            final String strippedTitle = shaderProgramBase.getTitle().replace(":", "");
+
+            File file = new File(PathManager.getInstance().getLogPath(), debugShaderType.toLowerCase() + "_" + strippedTitle + "_" + featureHash + ".glsl");
+            FileWriter fileWriter = new FileWriter(file);
+
+            BufferedWriter out = new BufferedWriter(fileWriter);
+
+            out.write(shader.toString());
+
+            out.close();
+        } catch (Exception e) {
+            logger.error("Failed to dump shader source.");
         }
 
         GL20.glShaderSource(shaderId, shader.toString());
@@ -353,20 +402,6 @@ public class GLSLShaderProgramInstance {
         }
     }
 
-    private String readShader(String filename) {
-        String line, code = "";
-        try {
-            BufferedReader reader = new BufferedReader(new InputStreamReader(ResourceLoader.getResource("assets/shaders/" + filename).openStream()));
-            while ((line = reader.readLine()) != null) {
-                code += line + "\n";
-            }
-        } catch (Exception e) {
-            logger.error("Failed to read shader '{}'.", filename, e);
-        }
-
-        return code;
-    }
-
     private boolean printLogInfo(int shaderId, StringBuilder logEntry) {
         int length = ARBShaderObjects.glGetObjectParameteriARB(shaderId, ARBShaderObjects.GL_OBJECT_INFO_LOG_LENGTH_ARB);
 
@@ -386,59 +421,189 @@ public class GLSLShaderProgramInstance {
         return true;
     }
 
+    /**
+     * Makes sure this shader program is the current shader program in the 
+     * OpenGL state.
+     * It checks if this shader program is the active shader program in the OpenGL
+     * state, if not it sets this shader program to be the current shader program.
+     */
     public void enable() {
         GLSLShaderProgramInstance activeProgram = ShaderManager.getInstance().getActiveShaderProgram();
 
-        if (activeProgram != this || ShaderManager.getInstance().getActiveFeatures() != activeFeatures) {
+        if (activeProgram != this || activeFeaturesChanged) {
             GL13.glActiveTexture(GL13.GL_TEXTURE0);
-            GL20.glUseProgram(shaderPrograms.get(activeFeatures));
+            GL20.glUseProgram(getActiveShaderProgramId());
 
             // Make sure the shader manager knows that this program is currently active
             ShaderManager.getInstance().setActiveShaderProgram(this);
+            activeFeaturesChanged = false;
 
             // Set the shader parameters if available
             if (shaderParameters != null) {
                 shaderParameters.applyParameters(this);
             }
+            prevValues.clear();
         }
     }
 
-    public void setFloat(String desc, float f) {
-        enable();
-        int id = GL20.glGetUniformLocation(shaderPrograms.get(activeFeatures), desc);
-        GL20.glUniform1f(id, f);
+    /**
+     * Returns the ID of teh currently active shader of this shader 
+     * program.
+     * @return the ID of teh currently active shader of this shader 
+     * program.
+     */
+    public int getActiveShaderProgramId() {
+        return shaderPrograms.get(activeFeatures);
     }
 
-    public void setFloat2(String desc, float f1, float f2) {
+    /**
+     * Sets the shader uniform of the current shader of this shader
+     * program to be the given value.
+     * @param desc the uniform name, as used in the shader program itself.
+     * @param f the value to set the uniform to.
+     */
+    public void setFloat(String desc, float f) {
+        int activeShaderProgramId = getActiveShaderProgramId();
+
+        if (activeShaderProgramId <= 0) {
+            return;
+        }
+
         enable();
-        int id = GL20.glGetUniformLocation(shaderPrograms.get(activeFeatures), desc);
+        boolean changed = true;
+        Float val = prevValues.get(desc);
+        if(val == null) {
+            prevValues.put(desc, f);
+        } else {
+            changed = val != f;
+        }
+        if(changed) {
+            prevValues.put(desc, f);
+            int id = getUniformLocation(activeShaderProgramId, desc);
+            GL20.glUniform1f(id, f);
+        }
+    }
+
+    /**
+     * Sets the shader uniform of the current shader of this shader
+     * program to be the given value.
+     * @param desc the uniform name, as used in the shader program itself.
+     * @param f1
+     * @param f2 
+     */
+    public void setFloat2(String desc, float f1, float f2) {
+        int activeShaderProgramId = getActiveShaderProgramId();
+
+        if (activeShaderProgramId <= 0) {
+            return;
+        }
+
+        enable();
+        int id = getUniformLocation(activeShaderProgramId, desc);
         GL20.glUniform2f(id, f1, f2);
     }
 
+    /**
+     * Sets the shader uniform of the current shader of this shader
+     * program to be the given value.
+     * @param desc the uniform name, as used in the shader program itself.
+     * @param f1
+     * @param f2
+     * @param f3 
+     */
     public void setFloat3(String desc, float f1, float f2, float f3) {
+        int activeShaderProgramId = getActiveShaderProgramId();
+
+        if (activeShaderProgramId <= 0) {
+            return;
+        }
+
         enable();
-        int id = GL20.glGetUniformLocation(shaderPrograms.get(activeFeatures), desc);
+        int id = getUniformLocation(activeShaderProgramId, desc);
         GL20.glUniform3f(id, f1, f2, f3);
     }
 
-    public void setFloat4(String desc, float f1, float f2, float f3, float f4) {
+    /**
+     * Sets the shader uniform of the current shader of this shader
+     * program to be the given value.
+     * @param desc the uniform name, as used in the shader program itself.
+     * @param buffer 
+     */
+    public void setFloat3(String desc, FloatBuffer buffer) {
+        int activeShaderProgramId = getActiveShaderProgramId();
+
+        if (activeShaderProgramId <= 0) {
+            return;
+        }
+
         enable();
-        int id = GL20.glGetUniformLocation(shaderPrograms.get(activeFeatures), desc);
+        int id = getUniformLocation(activeShaderProgramId, desc);
+        GL20.glUniform3(id, buffer);
+    }
+
+    /**
+     * Sets the shader uniform of the current shader of this shader
+     * program to be the given value.
+     * @param desc the uniform name, as used in the shader program itself.
+     * @param f1
+     * @param f2
+     * @param f3
+     * @param f4 
+     */
+    public void setFloat4(String desc, float f1, float f2, float f3, float f4) {
+        int activeShaderProgramId = getActiveShaderProgramId();
+
+        if (activeShaderProgramId <= 0) {
+            return;
+        }
+
+        enable();
+        int id = getUniformLocation(activeShaderProgramId, desc);
         GL20.glUniform4f(id, f1, f2, f3, f4);
     }
 
+    /**
+     * Sets the shader uniform of the current shader of this shader
+     * program to be the given value.
+     * @param desc the uniform name, as used in the shader program itself.
+     * @param i 
+     */
     public void setInt(String desc, int i) {
+        int activeShaderProgramId = getActiveShaderProgramId();
+
+        if (activeShaderProgramId <= 0) {
+            return;
+        }
+
         enable();
-        int id = GL20.glGetUniformLocation(shaderPrograms.get(activeFeatures), desc);
+        int id = getUniformLocation(activeShaderProgramId, desc);
         GL20.glUniform1i(id, i);
     }
 
+    /**
+     * Sets the shader uniform of the current shader of this shader
+     * program to be the given value.
+     * @param desc the uniform name, as used in the shader program itself.
+     * @param b 
+     */
     public void setBoolean(String desc, boolean b) {
+        int activeShaderProgramId = getActiveShaderProgramId();
+
+        if (activeShaderProgramId <= 0) {
+            return;
+        }
+
         enable();
-        int id = GL20.glGetUniformLocation(shaderPrograms.get(activeFeatures), desc);
+        int id = getUniformLocation(activeShaderProgramId, desc);
         GL20.glUniform1i(id, b ? 1 : 0);
     }
 
+    /**
+     * Sets the shader uniform of the current shader of this shader
+     * program to be the given value.
+     * @param desc the uniform name, as used in the shader program itself.
+     * @param i 
+     */
     public void setIntForAllPermutations(String desc, int i) {
         TIntIntIterator it = shaderPrograms.iterator();
 
@@ -446,13 +611,19 @@ public class GLSLShaderProgramInstance {
             it.advance();
 
             GL20.glUseProgram(it.value());
-            int id = GL20.glGetUniformLocation(it.value(), desc);
+            int id = getUniformLocation(it.value(), desc);
             GL20.glUniform1i(id, i);
         }
 
         enable();
     }
 
+    /**
+     * Sets the shader uniform of the current shader of this shader
+     * program to be the given value.
+     * @param desc the uniform name, as used in the shader program itself.
+     * @param b 
+     */
     public void setBooleanForAllPermutations(String desc, boolean b) {
         TIntIntIterator it = shaderPrograms.iterator();
 
@@ -460,13 +631,21 @@ public class GLSLShaderProgramInstance {
             it.advance();
 
             GL20.glUseProgram(it.value());
-            int id = GL20.glGetUniformLocation(it.value(), desc);
+            int id = getUniformLocation(it.value(), desc);
             GL20.glUniform1i(id, b ? 1 : 0);
         }
 
         enable();
     }
 
+    /**
+     * Sets the shader uniform of the current shader of this shader
+     * program to be the given value.
+     * @param desc the uniform name, as used in the shader program itself.
+     * @param f1
+     * @param f2
+     * @param f3 
+     */
     public void setFloat3ForAllPermutations(String desc, float f1, float f2, float f3) {
         TIntIntIterator it = shaderPrograms.iterator();
 
@@ -474,76 +653,184 @@ public class GLSLShaderProgramInstance {
             it.advance();
 
             GL20.glUseProgram(it.value());
-            int id = GL20.glGetUniformLocation(it.value(), desc);
+            int id = getUniformLocation(it.value(), desc);
             GL20.glUniform3f(id, f1, f2, f3);
         }
 
         enable();
     }
 
+    /**
+     * Sets the shader uniform of the current shader of this shader
+     * program to be the given value.
+     * @param desc the uniform name, as used in the shader program itself.
+     * @param buffer 
+     */
     public void setFloat2(String desc, FloatBuffer buffer) {
+        int activeShaderProgramId = getActiveShaderProgramId();
+
+        if (activeShaderProgramId <= 0) {
+            return;
+        }
+
         enable();
-        int id = GL20.glGetUniformLocation(shaderPrograms.get(activeFeatures), desc);
+        int id = getUniformLocation(activeShaderProgramId, desc);
         GL20.glUniform2(id, buffer);
     }
 
-    public void setFloat1(String desc, FloatBuffer buffer) {
+    /**
+     * Sets the shader uniform of the current shader of this shader
+     * program to be the given value.
+     * @param desc the uniform name, as used in the shader program itself.
+     * @param buffer 
+     */
+    public void setFloat(String desc, FloatBuffer buffer) {
+        int activeShaderProgramId = getActiveShaderProgramId();
+
+        if (activeShaderProgramId <= 0) {
+            return;
+        }
+
         enable();
-        int id = GL20.glGetUniformLocation(shaderPrograms.get(activeFeatures), desc);
+        int id = getUniformLocation(activeShaderProgramId, desc);
         GL20.glUniform1(id, buffer);
     }
 
+    /**
+     * Sets the shader uniform of the current shader of this shader
+     * program to be the given value.
+     * @param desc the uniform name, as used in the shader program itself.
+     * @param vec 
+     */
     public void setFloat4(String desc, Vector4f vec) {
+        int activeShaderProgramId = getActiveShaderProgramId();
+
+        if (activeShaderProgramId <= 0) {
+            return;
+        }
+
         setFloat4(desc, vec.x, vec.y, vec.z, vec.w);
     }
 
+    /**
+     * Sets the shader uniform of the current shader of this shader
+     * program to be the given value.
+     * @param desc the uniform name, as used in the shader program itself.
+     * @param floatBuffer 
+     */
     public void setMatrix4(String desc, FloatBuffer floatBuffer) {
+        int activeShaderProgramId = getActiveShaderProgramId();
+
+        if (activeShaderProgramId <= 0) {
+            return;
+        }
+        
         enable();
-        int id = GL20.glGetUniformLocation(shaderPrograms.get(activeFeatures), desc);
+        int id = getUniformLocation(activeShaderProgramId, desc);
         GL20.glUniformMatrix4(id, false, floatBuffer);
     }
+    
+    private int test = 0;
 
+    /**
+     * Sets the shader uniform of the current shader of this shader
+     * program to be the given value.
+     * @param desc the uniform name, as used in the shader program itself.
+     * @param floatBuffer 
+     */
     public void setMatrix3(String desc, FloatBuffer floatBuffer) {
+        int activeShaderProgramId = getActiveShaderProgramId();
+
+        if (activeShaderProgramId <= 0) {
+            return;
+        }
+        
         enable();
-        int id = GL20.glGetUniformLocation(shaderPrograms.get(activeFeatures), desc);
+        int id = getUniformLocation(activeShaderProgramId, desc);
         GL20.glUniformMatrix3(id, false, floatBuffer);
     }
 
+    /**
+     * Sets the shader uniform of the current shader of this shader
+     * program to be the given value.
+     * @param desc the uniform name, as used in the shader program itself.
+     * @param m 
+     */
     public void setMatrix4(String desc, Matrix4f m) {
+        int activeShaderProgramId = getActiveShaderProgramId();
+
+        if (activeShaderProgramId <= 0) {
+            return;
+        }
+        
         enable();
-        int id = GL20.glGetUniformLocation(shaderPrograms.get(activeFeatures), desc);
+        int id = getUniformLocation(activeShaderProgramId, desc);
         GL20.glUniformMatrix4(id, false, TeraMath.matrixToFloatBuffer(m));
     }
 
+    /**
+     * Sets the shader uniform of the current shader of this shader
+     * program to be the given value.
+     * @param desc the uniform name, as used in the shader program itself.
+     * @param m 
+     */
     public void setMatrix3(String desc, Matrix3f m) {
+        int activeShaderProgramId = getActiveShaderProgramId();
+
+        if (activeShaderProgramId <= 0) {
+            return;
+        }
+        
         enable();
-        int id = GL20.glGetUniformLocation(shaderPrograms.get(activeFeatures), desc);
+        int id = getUniformLocation(activeShaderProgramId, desc);
         GL20.glUniformMatrix3(id, false, TeraMath.matrixToFloatBuffer(m));
+    }
+
+    private int getUniformLocation(int activeShaderProgramId, String desc) {
+        
+        Integer id = uniformLocationMap.get(desc + ":" + getActiveShaderProgramId());
+        
+        if(id == null) {
+            id = GL20.glGetUniformLocation(activeShaderProgramId, desc);
+            //The ';' character ensures uniqueness.
+            uniformLocationMap.put(desc + ":" + activeShaderProgramId, id);
+        }
+        
+        return id;
+    }
+
+    public boolean wasSet(String desc) {
+        return uniformLocationMap.containsKey(desc + ":" + getActiveShaderProgramId());
+    }
+
+    public void setCamera(Camera camera) {
+        setMatrix4("viewMatrix", camera.getViewMatrix());
+        setMatrix4("projMatrix", camera.getProjectionMatrix());
+        setMatrix4("viewProjMatrix", camera.getViewProjectionMatrix());
+        setMatrix4("invProjMatrix", camera.getInverseProjectionMatrix());
     }
 
     public int getActiveFeatures() {
         return activeFeatures;
     }
 
-    public void setActiveFeatures(int featureHash) {
-        activeFeatures = featureHash;
-    }
-
     public void addFeatureIfAvailable(ShaderProgramFeatures feature) {
-        for (int i=1; i< ShaderProgramFeatures.FEATURE_ALL.getValue(); ++i) {
-            if ((ShaderProgramFeatures.values()[i].getValue() & feature.getValue()) > 0) {
-                activeFeatures |= feature.getValue();
-                return;
-            }
+        if ((availableFeatures & feature.getValue()) == feature.getValue()) {
+            activeFeatures |= feature.getValue();
+            activeFeaturesChanged = true;
+        } else {
+            throw new RuntimeException("Feature not available");
         }
     }
 
     public void removeFeature(ShaderProgramFeatures feature) {
         activeFeatures &= ~feature.getValue();
+        activeFeaturesChanged = true;
     }
 
     public void removeFeatures(int featureHash) {
         activeFeatures &= ~featureHash;
+        activeFeaturesChanged = true;
     }
 
     public GLSLShaderProgram getShaderProgramBase() {

@@ -17,8 +17,6 @@
 varying vec4 vertexProjPos;
 varying vec3 eyeVec;
 
-uniform vec3 lightWorldPosition;
-
 uniform mat4 modelMatrix;
 uniform mat4 viewMatrix;
 uniform mat4 projMatrix;
@@ -28,7 +26,7 @@ void main()
 {
 #if defined (FEATURE_LIGHT_POINT)
     vertexProjPos = (viewProjMatrix * modelMatrix) * gl_Vertex;
-#else
+#elif defined (FEATURE_LIGHT_DIRECTIONAL)
     vertexProjPos = gl_Vertex;
 #endif
 

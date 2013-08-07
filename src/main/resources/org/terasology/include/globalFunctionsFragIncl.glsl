@@ -14,31 +14,6 @@
  * limitations under the License.
  */
 
-#define LIGHT_SHAFT_SAMPLES 64
-#define MOTION_BLUR_SAMPLES 8
-
-#define A 0.15
-#define B 0.50
-#define C 0.10
-#define D 0.20
-#define E 0.02
-#define F 0.30
-#define W 11.2
-
-uniform bool swimming;
-uniform float viewingDistance;
-uniform float daylight;
-uniform float tick;
-uniform float time;
-uniform float sunlightValueAtPlayerPos;
-
-uniform vec3 sunVec;
-
-uniform vec3 cameraDirection;
-uniform vec3 cameraParameters;
-#define zNear cameraParameters.x
-#define zFar cameraParameters.y
-
 float linDepth(float depth) {
     return (2.0 * zNear) / (zFar + zNear - depth * (zFar - zNear));
 }
@@ -139,13 +114,6 @@ vec3 reconstructViewPos(float depth, vec2 texCoord, mat4 paramInvProjMatrix) {
     return viewSpacePos.xyz / viewSpacePos.w;
 }
 
-vec4 reconstructViewPosWithoutPerspectiveDivide(float depth, vec2 texCoord, mat4 paramInvProjMatrix) {
-    vec4 screenSpaceNorm = vec4(texCoord.x, texCoord.y, depth, 1.0);
-    vec4 screenSpacePos = screenSpaceNorm * vec4(2.0, 2.0, 1.0, 1.0) - vec4(1.0, 1.0, 0.0, 0.0);
-    vec4 viewSpacePos = paramInvProjMatrix * screenSpacePos;
-    return viewSpacePos;
-}
-
 vec2 normalizeAtlasTexCoord(vec2 atlasTexCoord) {
     return vec2(mod(atlasTexCoord.x, TEXTURE_OFFSET) * (1.0 / TEXTURE_OFFSET),
                 mod(atlasTexCoord.y, TEXTURE_OFFSET) * (1.0 / TEXTURE_OFFSET));
@@ -182,4 +150,50 @@ float calcVolumetricFog(vec3 fogWorldPosition, float volumetricHeightDensityAtVi
 
 float calcLuminance(vec3 color) {
     return 0.2126 * color.r + 0.7152 * color.g + 0.0722 * color.b;
+}
+
+vec3 calcBlocklightColor(float blocklightValue
+#if defined (FLICKERING_LIGHT)
+, float flickeringLightOffset
+#endif
+) {
+    // Calculate the final block light brightness
+    float blockBrightness = expBlockLightValue(blocklightValue);
+#if defined (FLICKERING_LIGHT)
+    blockBrightness -= flickeringLightOffset * blocklightValue;
+#endif
+
+    // Calculate the final blocklight color value and add a slight reddish tint to it
+    return vec3(blockBrightness) * vec3(1.0, 0.95, 0.94);
+}
+
+vec3 calcSunlightColorDeferred(float daylightValue, float diffuseLighting, float ambientIntensity, float diffuseIntensity, vec3 ambientColor, vec3 diffuseColor) {
+    float daylightScaledValue = daylight * daylightValue;
+    vec3 daylightColorValue = vec3(ambientIntensity) + diffuseLighting * diffuseIntensity * diffuseColor;
+
+    vec3 ambientTint = mix(vec3(MOONLIGHT_AMBIENT_COLOR), vec3(DAYLIGHT_AMBIENT_COLOR), daylight) * ambientColor;
+    daylightColorValue.xyz *= ambientTint;
+
+    // Scale the lighting according to the daylight and daylight block values and add moonlight during the nights
+    daylightColorValue.xyz *= expLightValue(daylightScaledValue) + (NIGHT_BRIGHTNESS * (1.0 - daylight) * expLightValue(daylightValue));
+
+    return daylightColorValue;
+}
+
+vec3 calcSunlightColorWater(float daylightValue, vec3 normal, vec3 sunVecViewAdjusted) {
+    float diffuseLighting = calcLambLight(normal, sunVecViewAdjusted);
+    return calcSunlightColorDeferred(daylightValue, diffuseLighting, WATER_AMB, WATER_DIFF, vec3(1.0), vec3(1.0));
+}
+
+vec3 calcSunlightColorOpaque(float daylightValue, vec3 normal, vec3 sunVecViewAdjusted) {
+    float diffuseLighting = calcLambLight(normal, sunVecViewAdjusted);
+    return calcSunlightColorDeferred(daylightValue, diffuseLighting, BLOCK_AMB, BLOCK_DIFF, vec3(1.0), vec3(1.0));
+}
+
+bool epsilonEquals(float val, float expectedResult) {
+    return abs(val - expectedResult) < EPSILON;
+}
+
+bool epsilonEqualsOne(float val) {
+    return epsilonEquals(val, 1.0);
 }

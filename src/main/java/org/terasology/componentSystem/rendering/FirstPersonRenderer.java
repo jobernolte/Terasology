@@ -130,11 +130,11 @@ public class FirstPersonRenderer implements RenderSystem {
 
     private void renderHand(float bobOffset, float handMovementAnimationOffset) {
         GLSLShaderProgramInstance shader = ShaderManager.getInstance().getShaderProgramInstance("block");
-        shader.setActiveFeatures(GLSLShaderProgramInstance.ShaderProgramFeatures.FEATURE_DEFERRED_LIGHTING.getValue()
-            | GLSLShaderProgramInstance.ShaderProgramFeatures.FEATURE_USE_MATRIX_STACK.getValue());
+        shader.addFeatureIfAvailable(GLSLShaderProgramInstance.ShaderProgramFeatures.FEATURE_USE_MATRIX_STACK);
 
         shader.enable();
-        shader.setFloat("light", worldRenderer.getRenderingLightValue());
+        shader.setFloat("sunlight", worldRenderer.getSunlightValue());
+        shader.setFloat("blockLight", worldRenderer.getBlockLightValue());
         glBindTexture(GL11.GL_TEXTURE_2D, handTex.getId());
 
         glPushMatrix();
@@ -148,18 +148,19 @@ public class FirstPersonRenderer implements RenderSystem {
 
         glPopMatrix();
 
-        shader.setActiveFeatures(0);
+        shader.removeFeature(GLSLShaderProgramInstance.ShaderProgramFeatures.FEATURE_USE_MATRIX_STACK);
     }
 
     private void renderIcon(String iconName, float bobOffset, float handMovementAnimationOffset) {
         GLSLShaderProgramInstance shader = ShaderManager.getInstance().getShaderProgramInstance("block");
-        shader.setActiveFeatures(GLSLShaderProgramInstance.ShaderProgramFeatures.FEATURE_DEFERRED_LIGHTING.getValue()
-                | GLSLShaderProgramInstance.ShaderProgramFeatures.FEATURE_USE_MATRIX_STACK.getValue());
+        shader.addFeatureIfAvailable(GLSLShaderProgramInstance.ShaderProgramFeatures.FEATURE_USE_MATRIX_STACK);
 
         shader.enable();
 
         shader.setBoolean("textured", false);
-        shader.setFloat("light", worldRenderer.getRenderingLightValue());
+
+        shader.setFloat("sunlight", worldRenderer.getSunlightValue());
+        shader.setFloat("blockLight", worldRenderer.getBlockLightValue());
 
         glPushMatrix();
 
@@ -181,7 +182,7 @@ public class FirstPersonRenderer implements RenderSystem {
 
         glPopMatrix();
 
-        shader.setActiveFeatures(0);
+        shader.removeFeature(GLSLShaderProgramInstance.ShaderProgramFeatures.FEATURE_USE_MATRIX_STACK);
     }
 
     private void renderBlock(BlockFamily blockFamily, float bobOffset, float handMovementAnimationOffset) {
@@ -190,15 +191,9 @@ public class FirstPersonRenderer implements RenderSystem {
 
         // Adjust the brightness of the block according to the current position of the player
         GLSLShaderProgramInstance shader = ShaderManager.getInstance().getShaderProgramInstance("block");
-        shader.setActiveFeatures(GLSLShaderProgramInstance.ShaderProgramFeatures.FEATURE_DEFERRED_LIGHTING.getValue()
-            | GLSLShaderProgramInstance.ShaderProgramFeatures.FEATURE_USE_MATRIX_STACK.getValue());
+        shader.addFeatureIfAvailable(GLSLShaderProgramInstance.ShaderProgramFeatures.FEATURE_USE_MATRIX_STACK);
 
         shader.enable();
-
-        // Apply biome and overall color offset
-        // TODO: Make me look nice not ugly!
-        //Vector4f color = activeBlock.calcColorOffsetFor(BlockPart.CENTER, worldProvider.getBiomeProvider().getTemperatureAt(TeraMath.floorToInt(playerPos.x), TeraMath.floorToInt(playerPos.z)), worldProvider.getBiomeProvider().getHumidityAt(TeraMath.floorToInt(playerPos.x), TeraMath.floorToInt(playerPos.z)));
-        //shader.setFloat3("colorOffset", color.x, color.y, color.z);
 
         glPushMatrix();
 
@@ -208,18 +203,19 @@ public class FirstPersonRenderer implements RenderSystem {
         glTranslatef(0f, 0.1f, 0f);
         glScalef(0.75f, 0.75f, 0.75f);
 
-        float lightValue = worldRenderer.getRenderingLightValue();
+        float blockLight = worldRenderer.getBlockLightValue();
+        float sunlight = worldRenderer.getSunlightValue();
 
         //  Blocks with a luminance > 0.0 shouldn't be affected by block light
         if (blockFamily.getArchetypeBlock().getLuminance() > 0.0) {
-            lightValue = 1.0f;
+            blockLight = 1.0f;
         }
 
-        activeBlock.renderWithLightValue(lightValue);
+        activeBlock.renderWithLightValue(sunlight, blockLight);
 
         glPopMatrix();
 
-        shader.setActiveFeatures(0);
+        shader.removeFeature(GLSLShaderProgramInstance.ShaderProgramFeatures.FEATURE_USE_MATRIX_STACK);
     }
 
     private float calcBobbingOffset(float counter, float phaseOffset, float amplitude, float frequency) {

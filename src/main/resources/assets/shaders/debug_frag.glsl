@@ -22,7 +22,6 @@ uniform mat4 invProjMatrix;
 
 void main(){
     vec4 color;
-
     vec4 texColor;
 
     if (debugRenderingStage == DEBUG_STAGE_OPAQUE_DEPTH) {
@@ -30,6 +29,12 @@ void main(){
         texColor = texture2D(texDebug, gl_TexCoord[0].xy);
         float linDepth = linDepth(texColor.x);
         color.xyz = vec3(linDepth);
+        color.a = 1.0;
+
+    } else if (debugRenderingStage == DEBUG_STAGE_OPAQUE_COLOR) {
+
+        texColor = texture2D(texDebug, gl_TexCoord[0].xy);
+        color.xyz = texColor.xyz;
         color.a = 1.0;
 
     } else if (debugRenderingStage == DEBUG_STAGE_OPAQUE_NORMALS) {
@@ -43,6 +48,18 @@ void main(){
         texColor = texture2D(texDebug, gl_TexCoord[0].xy);
         color.rgb = texColor.rgb;
         color.rgb += texColor.aaa;
+        color.a = 1.0;
+
+    } else if (debugRenderingStage == DEBUG_STAGE_OPAQUE_SUNLIGHT) {
+
+        texColor = texture2D(texDebug, gl_TexCoord[0].xy);
+        color.rgb = texColor.aaa;
+        color.a = 1.0;
+
+    } else if (debugRenderingStage == DEBUG_STAGE_BAKED_OCCLUSION) {
+
+        texColor = texture2D(texDebug, gl_TexCoord[0].xy);
+        color.rgb = texColor.aaa;
         color.a = 1.0;
 
    }  else if (debugRenderingStage == DEBUG_STAGE_RECONSTRUCTED_POSITION) {
@@ -60,5 +77,5 @@ void main(){
 
    }
 
-    gl_FragData[0] = color;
+   gl_FragData[0] = color;
 }

@@ -14,13 +14,13 @@ public class RenderingConfig {
     private int windowHeight = 720;
     private boolean fullscreen = false;
     private int activeViewDistanceMode = 0;
-    private boolean flickeringLight = false;
+    private boolean flickeringLight = true;
     private boolean animateGrass = false;
     private boolean animateWater = false;
     private float fieldOfView = 90;
     private boolean cameraBobbing = true;
     private boolean renderPlacingBox = true;
-    private int blurIntensity = 3;
+    private int blurIntensity = 2;
     private boolean reflectiveWater = false;
     private boolean vignette = true;
     private boolean motionBlur = false;
@@ -39,6 +39,7 @@ public class RenderingConfig {
     private boolean parallaxMapping = false;
     private boolean dynamicShadowsPcfFiltering = false;
     private boolean volumetricFog = false;
+    private boolean cloudShadows = false;
 
     public int getBlurRadius() {
         return Math.max(1, blurIntensity);
@@ -305,5 +306,13 @@ public class RenderingConfig {
 
     public void setVolumetricFog(boolean volumetricFog) {
         this.volumetricFog = volumetricFog;
+    }
+
+    public boolean isCloudShadows() {
+        return cloudShadows;
+    }
+
+    public void setCloudShadows(boolean cloudShadows) {
+        this.cloudShadows = cloudShadows;
     }
 }
